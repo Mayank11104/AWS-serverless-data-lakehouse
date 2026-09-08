@@ -145,6 +145,10 @@ GROUP BY 1
 ORDER BY 1 ASC;
 ```
 
+### Live Dashboard Preview
+
+![Grafana Dashboard — Revenue by Category, Payment Health, AOV, and Revenue Velocity](Screenshot%202026-09-08%20190132.png)
+
 ---
 
 ## 🚀 How to Deploy
