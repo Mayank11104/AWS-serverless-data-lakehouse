@@ -10,7 +10,7 @@ scrape_configs:
     static_configs:
       - targets: ['node-exporter:9100']
 
-  # Self-Hosted PySpark Lakehouse Metrics
+  # Scrapes Spark executor metrics from the Spark Node over private VPC IP
   - job_name: 'pyspark-lakehouse'
     metrics_path: '/metrics/executors/prometheus'
     static_configs:

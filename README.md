@@ -1,142 +1,267 @@
-# AWS Distributed Data Lakehouse & Observability Platform
+# AWS DataOps Pipeline — Real-Time Data Lakehouse on Free Tier
 
-A comprehensive, end-to-end cloud data engineering and observability platform built entirely on the AWS Free Tier. This project demonstrates how to ingest, transform, and visualize real-time streaming data using a distributed microservices architecture.
+A real-time data pipeline and analytics project built entirely on the **AWS Free Tier** using two EC2 instances. It ingests fake e-commerce transactions, transforms them using PySpark, and visualizes the results through a live Grafana dashboard powered by AWS Athena.
 
-## 🏗 Architecture Overview
+> Built this while dealing with RAM constraints, Grafana UI bugs in v11, Athena workgroup errors, SSH key issues, and IAM permission errors — all documented below.
+
+---
+
+## 📐 Architecture
+
+The biggest challenge was running everything on Free Tier (1–2 GB RAM per node). Running Spark, Grafana, and Prometheus all on one machine would crash it. So the project is split into **two EC2 nodes** that communicate over a private VPC network.
 
 ```mermaid
 graph TD
-    subgraph Control_Node ["Control Node (t3.small)"]
+    subgraph Control_Node ["Control Node — t3.small (2GB RAM)"]
         Generator["Python Data Generator"]
         Prometheus["Prometheus"]
-        Grafana["Grafana"]
+        Grafana["Grafana + Athena Plugin"]
     end
-    
-    subgraph Spark_Node ["Spark Node (t3.micro)"]
+
+    subgraph Spark_Node ["Spark Node — t3.micro (1GB RAM)"]
         PySpark["PySpark ETL Engine"]
         NodeExporter["Node Exporter"]
     end
 
-    subgraph AWS_Cloud ["AWS Cloud Storage & Compute"]
-        RawS3[("Raw S3 Bucket JSON")]
-        CuratedS3[("Curated S3 Bucket Parquet")]
-        Athena["AWS Athena (SQL Engine)"]
-        Glue["AWS Glue (Data Catalog)"]
-    end
-    
-    subgraph BI_Insights ["Business Intelligence Insights"]
-        PaymentHealth["Payment Health"]
-        AOV["Average Order Value"]
-        VIP["VIP Customers"]
-        Velocity["Revenue Velocity"]
+    subgraph AWS_S3 ["AWS S3 — Data Lake"]
+        RawS3[("Raw Bucket\nJSON files")]
+        CuratedS3[("Curated Bucket\nParquet files")]
+        AthenaResults[("Athena Results\nBucket")]
     end
 
-    %% Data Pipeline Flow
-    Generator -->|1. Streams JSON| RawS3
-    RawS3 -->|2. Reads JSON| PySpark
-    PySpark -->|3. Transforms to Parquet| CuratedS3
-    CuratedS3 -.->|Registers Schema| Glue
-    Glue -.->|Provides Catalog| Athena
-    Athena -->|4. SQL Queries| Grafana
-    
-    %% BI Flow
-    Grafana -->|Visualizes| PaymentHealth
-    Grafana -->|Visualizes| AOV
-    Grafana -->|Visualizes| VIP
-    Grafana -->|Visualizes| Velocity
-    
-    %% Observability Flow
-    NodeExporter -.->|Hardware Metrics| Prometheus
-    PySpark -.->|Software Metrics| Prometheus
-    Prometheus -.->|System Dashboards| Grafana
+    subgraph AWS_Compute ["AWS Serverless Compute"]
+        Glue["AWS Glue\nData Catalog"]
+        Athena["AWS Athena\nSQL Engine"]
+    end
+
+    subgraph Dashboards ["Live Grafana Dashboards"]
+        PaymentHealth["Payment Health\nPie Chart"]
+        AOV["Avg Order Value\nBar Gauge"]
+        VIP["Top Customers\nTable"]
+        Velocity["Revenue Velocity\nBar Chart"]
+    end
+
+    Generator -->|"1. Write JSON every 5s"| RawS3
+    RawS3 -->|"2. Read raw JSON"| PySpark
+    PySpark -->|"3. Write Parquet"| CuratedS3
+    CuratedS3 -.->|"Register schema"| Glue
+    Glue -.->|"Provide catalog"| Athena
+    Athena -->|"4. Run SQL"| Grafana
+
+    Grafana --> PaymentHealth
+    Grafana --> AOV
+    Grafana --> VIP
+    Grafana --> Velocity
+
+    NodeExporter -.->|"CPU/RAM/Disk metrics"| Prometheus
+    Prometheus -.->|"System dashboards"| Grafana
 
     classDef aws fill:#FF9900,stroke:#232F3E,stroke-width:2px,color:white;
     classDef grafana fill:#F46800,stroke:#fff,stroke-width:2px,color:white;
     classDef spark fill:#E25A1C,stroke:#fff,stroke-width:2px,color:white;
-    classDef bi fill:#232F3E,stroke:#fff,stroke-width:2px,color:white;
-    
-    class RawS3,CuratedS3,Athena,Glue aws;
+    classDef bi fill:#1a1a2e,stroke:#fff,stroke-width:2px,color:white;
+
+    class RawS3,CuratedS3,AthenaResults,Glue,Athena aws;
     class Grafana grafana;
     class PySpark spark;
     class PaymentHealth,AOV,VIP,Velocity bi;
 ```
 
-To circumvent the heavy resource constraints of the AWS Free Tier (1GB-2GB RAM), the architecture is split across two distributed EC2 instances communicating securely within a Private VPC.
+### Control Node (`t3.small`)
+- Runs the **Python data generator** — writes a fake transaction to S3 every 5 seconds
+- Runs **Prometheus** — scrapes system metrics from both nodes
+- Runs **Grafana** — shows both system health and business dashboards
 
-### 1. The Control Node (`t3.small`)
-The centralized hub for data generation and system visualization.
-* **Data Generator**: A custom Python script simulating real-time e-commerce financial transactions, writing JSON payloads directly to an AWS S3 Raw Landing Zone.
-* **Grafana**: The visualization engine used to construct real-time Business Intelligence dashboards and system observability metrics.
-* **Prometheus**: Scrapes hardware and software metrics from all nodes across the private network.
-
-### 2. The Spark Node (`t3.micro`)
-The heavy-duty data transformation engine.
-* **PySpark / Delta Lake**: Runs inside a containerized Jupyter Notebook environment. It continuously streams raw JSON data from S3, applies schema validation and data casting, and writes highly-optimized columnar Parquet files back to an S3 Curated bucket.
-* **Node Exporter**: Exposes system-level metrics (CPU, RAM, Disk) back to the Control Node's Prometheus instance.
+### Spark Node (`t3.micro`)
+- Runs **PySpark** inside a Jupyter Docker container — reads raw JSON from S3 and converts it to Parquet format
+- Runs **Node Exporter** — exposes CPU/RAM/Disk metrics to Prometheus on the Control Node over private IP
 
 ---
 
-## 🛠 Tech Stack
+## 🛠️ Tech Stack
 
-* **Infrastructure as Code (IaC):** Terraform
-* **Cloud Provider:** Amazon Web Services (EC2, S3, IAM Profiles, VPC)
-* **Data Processing / ETL:** Apache Spark (PySpark), Delta Lake format
-* **Data Lake & Compute:** AWS S3 (Storage), AWS Athena (Serverless SQL Compute), AWS Glue (Data Catalog)
-* **Observability & BI:** Grafana, Prometheus, Node Exporter, Docker Compose
-
----
-
-## 🌊 The Data Pipeline Flow
-
-1. **Ingestion**: `stream_data.py` generates e-commerce transactions (Customer ID, Product Category, Amount, Payment Status) and streams them as JSON into the S3 `raw-landing-zone` bucket.
-2. **Transformation**: PySpark (`jupyter_pipeline.py`) reads the raw JSON stream, strictly enforces a schema, and converts the data into Parquet format, dumping it into the S3 `curated-delta-lake` bucket.
-3. **Query Engine**: AWS Athena acts as a serverless translation layer. A `CREATE EXTERNAL TABLE` query registers the Parquet files into the AWS Glue Data Catalog, allowing standard SQL queries over the S3 object storage.
-4. **Visualization**: Grafana queries AWS Athena using the Athena Data Source plugin (auto-provisioned) to render real-time Business Intelligence dashboards.
+| Layer | Tools Used |
+|-------|------------|
+| Infrastructure | Terraform, AWS EC2, VPC, S3, IAM |
+| Data Generation | Python, Boto3 |
+| ETL / Transform | Apache Spark (PySpark), Parquet |
+| Query Engine | AWS Athena, AWS Glue Data Catalog |
+| Observability | Prometheus, Node Exporter |
+| Dashboards | Grafana, Grafana Athena Plugin |
+| Containers | Docker, Docker Compose |
 
 ---
 
-## 📊 Dashboards & Analytics
+## 🌊 How the Data Flows
 
-The project ships with a suite of industry-standard e-commerce Business Intelligence panels:
+1. **Generator** → `stream_data.py` runs on the Control Node, generates fake transactions (Customer, Category, Amount, Status) and writes each one as a JSON file to the **Raw S3 bucket** every 5 seconds.
 
-* **Payment Health (Success vs. Failure Rate)**: A Pie Chart tracking payment gateway stability.
-* **Average Order Value (AOV) by Category**: Bar Gauges highlighting the most lucrative product verticals.
-* **Top 10 VIP Customers (Whales)**: A tabular view of the highest-spending customers.
-* **Real-Time Revenue Velocity**: A time-series analysis of sales-per-minute to detect immediate drops in conversion rates.
+2. **PySpark ETL** → `jupyter_pipeline.ipynb` running on the Spark Node reads those JSON files, validates the schema, filters out bad records (null IDs, negative amounts), and writes clean **Parquet files** into the **Curated S3 bucket**.
+
+3. **Athena** → We ran a `CREATE EXTERNAL TABLE` SQL query once in Grafana's Explore tab. This tells AWS Glue to register the Parquet files as a SQL table. After that, Athena can query the S3 data like a regular database.
+
+4. **Grafana** → Pulls data from Athena using SQL queries and renders it as charts on the dashboard. The Athena data source is auto-provisioned via a config file so you don't need to configure it manually.
 
 ---
 
-## 🚀 Deployment Instructions
+## 📊 Dashboard Panels
 
-### 1. Provision Infrastructure
-Configure your AWS credentials, then deploy the infrastructure using Terraform:
+All 4 panels are powered by Athena SQL queries running against the live Parquet data in S3.
+
+### 1. Revenue by Category (Bar Chart)
+```sql
+SELECT product_category, sum(amount) as total_revenue
+FROM default.transactions
+WHERE payment_status = 'SUCCESS'
+GROUP BY product_category
+ORDER BY total_revenue DESC;
+```
+
+### 2. Payment Health — Success vs Failure (Pie Chart)
+```sql
+SELECT payment_status, count(*) as transaction_count
+FROM default.transactions
+GROUP BY payment_status
+ORDER BY transaction_count DESC;
+```
+
+### 3. Average Order Value by Category (Bar Gauge)
+```sql
+SELECT product_category, avg(amount) as average_order_value
+FROM default.transactions
+WHERE payment_status = 'SUCCESS'
+GROUP BY product_category
+ORDER BY average_order_value DESC;
+```
+
+### 4. Real-Time Revenue Velocity (Bar Chart)
+```sql
+SELECT
+  date_trunc('minute', from_iso8601_timestamp(timestamp)) as time,
+  sum(amount) as revenue_per_minute
+FROM default.transactions
+WHERE payment_status = 'SUCCESS'
+GROUP BY 1
+ORDER BY 1 ASC;
+```
+
+---
+
+## 🚀 How to Deploy
+
+### Prerequisites
+- AWS account with CLI configured (`aws configure`)
+- Terraform installed
+- An SSH key pair generated at `terraform/keys/aws-infra-key` (private) and `terraform/keys/aws-infra-key.pub` (public)
+
+### Step 1 — Provision Infrastructure
 ```bash
 cd terraform
 terraform init
 terraform apply -auto-approve
 ```
-*Note: This automatically sets up the IAM Instance Profiles, eliminating the need for hardcoded AWS access keys.*
+This creates both EC2 nodes, the S3 buckets, VPC networking, and the IAM roles. The EC2 instances use **IAM Instance Profiles** so no AWS credentials need to be hardcoded anywhere.
 
-### 2. Start the Data Generator
-SSH into the Control Node and start the data stream:
-```bash
-python3 generator/stream_data.py
+After apply, note the output IPs:
+```
+control_node_public_ip = "x.x.x.x"
+spark_node_public_ip   = "x.x.x.x"
 ```
 
-### 3. Start the PySpark ETL
-SSH into the Spark Node and execute the transformation pipeline:
+### Step 2 — SSH into the Control Node
 ```bash
-python3 jupyter_pipeline.py
+ssh -i terraform/keys/aws-infra-key ubuntu@<control_node_public_ip>
 ```
 
-### 4. Access Grafana
-Navigate to `http://<CONTROL_NODE_PUBLIC_IP>:3000`. Grafana is automatically provisioned with the Athena Data Source.
-Navigate to the **Explore** tab to write custom SQL queries against your Data Lakehouse, and click "Add to Dashboard" to build your custom visual command center!
+### Step 3 — Start the Monitoring Stack
+```bash
+cd monitoring
+sudo docker compose up -d
+```
+This starts Prometheus, Grafana, and Node Exporter. Grafana auto-installs the Athena plugin on first boot.
+
+### Step 4 — Start the Data Generator
+```bash
+cd generator
+python3 stream_data.py
+```
+
+### Step 5 — SSH into Spark Node and Start PySpark
+```bash
+ssh -i terraform/keys/aws-infra-key ubuntu@<spark_node_public_ip>
+cd monitoring
+sudo docker compose up -d   # starts Jupyter + Node Exporter
+```
+Open `http://<spark_node_public_ip>:8888` in your browser and run `jupyter_pipeline.ipynb`.
+
+### Step 6 — Register the Athena Table (run once)
+Open Grafana at `http://<control_node_public_ip>:3000`, go to **Explore → Athena**, and run this query once to register the table:
+```sql
+CREATE EXTERNAL TABLE IF NOT EXISTS default.transactions (
+  transaction_id   string,
+  customer_id      string,
+  product_category string,
+  amount           double,
+  payment_status   string,
+  timestamp        string
+)
+STORED AS PARQUET
+LOCATION 's3://<your-curated-bucket>/silver/transactions/';
+```
+
+### Step 7 — Build Your Dashboard
+In the Grafana **Explore** tab, paste any of the SQL queries from the Dashboard Panels section above, click **Run query**, then click **Add → Add to dashboard** to save it as a panel.
+
+---
+
+## ⚠️ Known Issues & How We Fixed Them
+
+| Problem | Fix |
+|---------|-----|
+| SSH key not found error | The key file must be at `terraform/keys/aws-infra-key` with `chmod 400` permissions on Linux/Mac |
+| Grafana Athena dropdown not showing `AwsDataCatalog` | Type it manually in the text field and press Enter — it's a text input disguised as a dropdown |
+| `workGroup` validation error in Athena | The workgroup name must match `[a-zA-Z0-9._-]{1,128}`. Use `primary` (all lowercase) |
+| Grafana v11 "Add Panel" button missing | Click **Explore** in the left sidebar instead of the Dashboard. Write your query there, then use **Add → Add to dashboard** |
+| `No data` after running `CREATE EXTERNAL TABLE` | This is expected — DDL statements don't return rows. The table is registered. Run a `SELECT` next |
+| Athena plugin not visible in data sources | The plugin needs time to install on first boot. Wait ~2 minutes and refresh, or restart the Grafana container |
+
+---
+
+## 🗂️ Project Structure
+
+```
+dataops/
+├── generator/
+│   ├── stream_data.py          # Generates fake transactions → S3
+│   └── requirements.txt
+├── monitoring/
+│   ├── docker-compose.yml      # Prometheus + Grafana + Node Exporter
+│   ├── prometheus/
+│   │   └── prometheus.yml      # Scrape configs for both nodes
+│   └── grafana/
+│       └── provisioning/
+│           └── datasources/
+│               ├── athena.yml      # Auto-provisions Athena data source
+│               └── prometheus.yml  # Auto-provisions Prometheus data source
+├── terraform/
+│   ├── main.tf                 # S3 buckets
+│   ├── compute.tf              # EC2 instances
+│   ├── network.tf              # VPC, subnet, security groups
+│   ├── iam.tf                  # IAM roles and instance profiles
+│   ├── providers.tf            # AWS provider config
+│   ├── variables.tf            # Input variables
+│   ├── outputs.tf              # Public IPs output
+│   └── scripts/
+│       └── install_docker.sh   # Bootstrap script for EC2 on first boot
+├── jupyter_pipeline.ipynb      # PySpark ETL — JSON to Parquet
+└── README.md
+```
 
 ---
 
 ## 🧹 Tear Down
-To avoid AWS charges, ensure you destroy the infrastructure when finished:
+
+Run this when you're done to avoid AWS charges:
 ```bash
 cd terraform
 terraform destroy -auto-approve
