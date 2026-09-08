@@ -1,4 +1,4 @@
-# AWS DataOps Pipeline — Real-Time Data Lakehouse on Free Tier
+# AWS Serverless Data Lakehouse
 
 A real-time data pipeline and analytics project built entirely on the **AWS Free Tier** using two EC2 instances. It ingests fake e-commerce transactions, transforms them using PySpark, and visualizes the results through a live Grafana dashboard powered by AWS Athena.
 
